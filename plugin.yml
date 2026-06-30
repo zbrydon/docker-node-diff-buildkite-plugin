@@ -13,7 +13,7 @@ configuration:
       description: Branch allow-list gate. Defaults to "renovate-docker-images".
     syft-version:
       type: string
-      description: Pinned Syft release to install. Defaults to "v1.46.0".
+      description: Pinned Syft release as "<version>@sha256:<digest>", where the digest is the sha256 of that release's checksums.txt. The value must include the @sha256 digest. Defaults to a version+digest baked into the plugin.
     github-token-env:
       type: string
       description: Name of the env var holding the PR-write token. Defaults to "GITHUB_TOKEN".

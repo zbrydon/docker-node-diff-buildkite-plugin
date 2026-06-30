@@ -49,21 +49,23 @@ steps:
 
 All options are optional.
 
-| Option             | Type            | Default                  | Description                                     |
-| ------------------ | --------------- | ------------------------ | ----------------------------------------------- |
-| `branches`         | string \| array | `renovate-docker-images` | Branches the plugin is allowed to run on.       |
-| `syft-version`     | string          | `v1.46.0`                | Pinned Syft release to download.                |
-| `github-token-env` | string          | `GITHUB_TOKEN`           | Name of the env var holding the PR-write token. |
+| Option             | Type            | Default                                                                           | Description                                                                                                    |
+| ------------------ | --------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `branches`         | string \| array | `renovate-docker-images`                                                          | Branches the plugin is allowed to run on.                                                                      |
+| `syft-version`     | string          | `v1.46.0@sha256:2fefc202b2eccab83888cc91f5a364a75df0dd777afbbae5b5e23ebd93d81ac6` | Pinned Syft release as `<version>@sha256:<digest>` (see [Syft integrity](#security)). Must include the digest. |
+| `github-token-env` | string          | `GITHUB_TOKEN`                                                                    | Name of the env var holding the PR-write token.                                                                |
 
 ## Requirements
 
 - `jq`, `git`, `curl`, `tar` and `gh` on the agent.
 - A GitHub token with PR-write access. Without it the plugin still runs and prints the report but skips the PR update.
 
-The `environment` hook downloads the pinned Syft release, verifies its SHA-256 against the
-published `checksums.txt`, and installs it onto `PATH`. This plugin assumes **ephemeral
-agents**: it re-downloads Syft each build and leaves the install dir behind, which would
-accumulate on a persistent agent.
+The `environment` hook downloads the pinned Syft release and verifies it before
+installing it onto `PATH`. The `syft-version` pin is a `<version>@sha256:<digest>`
+token (default baked into the plugin); the digest is the sha256 of that release's
+`checksums.txt`, so it transitively pins every platform's binary. This plugin
+assumes **ephemeral agents**: it re-downloads Syft each build and leaves the
+install dir behind, which would accumulate on a persistent agent.
 
 ## Security
 
@@ -76,11 +78,35 @@ boundary:
   runs when the PR source repo (`BUILDKITE_PULL_REQUEST_REPO`) matches the base
   repo (`BUILDKITE_REPO`). Even so, do not expose the PR-write token to
   fork/untrusted builds as a matter of pipeline policy.
-- **Syft integrity.** The `environment` hook verifies the downloaded Syft
-  archive against the `checksums.txt` published with the same GitHub release.
-  This guards against transport corruption but not a compromised release - there
-  is no cosign/GPG signature verification, so GitHub is the sole integrity root.
-  Pinning `syft-version` mitigates casual tampering.
+- **Syft integrity.** The trust root is pinned in this repo. The `syft-version`
+  value is `<version>@sha256:<digest>`, where the digest is the sha256 of the
+  release's `checksums.txt`. The `environment` hook downloads that
+  `checksums.txt`, refuses to proceed unless its sha256 matches the pinned
+  digest, then verifies the downloaded archive against the (now-trusted)
+  manifest. Because the digest lives in version control, the installed binary
+  cannot change without a reviewable change to the pin - GitHub is no longer the
+  sole integrity root. There is still no cosign/GPG signature verification, so
+  trust is established at the moment you compute the digest; verify the release
+  out of band before bumping the pin.
+
+### Updating Syft
+
+TODO: Replace with renovate
+
+To bump the pinned version, recompute the digest of the new release's
+`checksums.txt` and update `SYFT_DEFAULT_PIN` in `hooks/environment` (or the
+`syft-version` option in your pipeline):
+
+```bash
+v=1.47.0
+curl --proto '=https' --tlsv1.2 -fsSL \
+  "https://github.com/anchore/syft/releases/download/v${v}/syft_${v}_checksums.txt" \
+  | sha256sum
+# -> set the pin to "v${v}@sha256:<that digest>"
+```
+
+The change lands as a one-line, reviewable diff, so the Syft binary can never
+move without your knowledge.
 
 ## Development
 

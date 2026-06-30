@@ -85,3 +85,21 @@ sha256_file() {
     shasum -a 256 "$1" | awk '{print $1}'
   fi
 }
+
+# parse_syft_pin PIN -> splits "<version>@sha256:<64 hex>" into SYFT_PIN_VERSION
+# and SYFT_PIN_SHA256 (lowercased). Non-zero if either part is missing/malformed:
+# the version must be a plausible tag (no whitespace/stray chars) and the digest
+# exactly 64 hex.
+parse_syft_pin() {
+  local pin="$1" ver sha
+  case "$pin" in *@sha256:*) ;; *) return 1 ;; esac
+  ver="${pin%@sha256:*}"
+  sha="${pin##*@sha256:}"
+  case "$ver" in '' | *[!0-9A-Za-z.+_-]*) return 1 ;; esac
+  case "$sha" in '' | *[!0-9a-fA-F]*) return 1 ;; esac
+  [ "${#sha}" -eq 64 ] || return 1
+  # shellcheck disable=SC2034 # consumed by hooks/environment after sourcing
+  SYFT_PIN_VERSION="$ver"
+  # shellcheck disable=SC2034 # consumed by hooks/environment after sourcing
+  SYFT_PIN_SHA256="$(printf '%s' "$sha" | tr 'A-F' 'a-f')"
+}
