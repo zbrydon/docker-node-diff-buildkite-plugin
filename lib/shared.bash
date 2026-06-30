@@ -49,7 +49,10 @@ image_repo() {
   printf '%s' "${prefix}${name}"
 }
 
-# repo_slug URL -> owner/name, stripping host, scheme, .git suffix, trailing slash.
+# repo_slug URL -> owner/name. github.com only: strips a github.com[:/] host (https
+# or ssh), the .git suffix and a trailing slash. URLs on other hosts (e.g. GitHub
+# Enterprise) pass through unchanged, so upsert_pr's `gh --repo "$slug"` calls will
+# fail there. is_fork_pr is unaffected (it compares two slugs from the same host).
 repo_slug() {
   printf '%s' "$1" | sed -E 's#^.*github\.com[:/]##; s#\.git$##; s#/$##'
 }
