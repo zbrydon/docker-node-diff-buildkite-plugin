@@ -330,19 +330,31 @@ upsert_pr() {
   fi
   [ "$cur" = "null" ] && cur=""
 
+  local had_block=0
+  grep -qF "$MARKER_START" <<<"$cur" && had_block=1
+
+  # Nothing to say and nothing to clean up -> leave the description untouched.
+  if [ "$had_block" -eq 0 ] && [ "$have_content" -le 0 ]; then
+    log "no image changes and no existing block; leaving PR description untouched"
+    return 0
+  fi
+
   local newbody="${WORKDIR}/newbody.md"
-  if grep -qF "$MARKER_START" <<<"$cur"; then
+  if [ "$had_block" -eq 1 ]; then
+    # Replace the first block in place; drop any duplicate blocks. Preserves
+    # the content both above and below the block.
     awk -v start="$MARKER_START" -v end="$MARKER_END" -v bf="$blockfile" '
       function dumpblock() { while ((getline l < bf) > 0) print l; close(bf) }
-      index($0, start) { dumpblock(); skip = 1; next }
+      index($0, start) { if (!done) { dumpblock(); done = 1 } skip = 1; next }
       index($0, end)   { skip = 0; next }
       !skip            { print }
     ' <<<"$cur" >"$newbody"
-  elif [ "$have_content" -gt 0 ]; then
+  elif [ -n "$cur" ]; then
+    # First post into a non-empty body: separate it from the block.
     { printf '%s\n\n---\n\n' "$cur"; cat "$blockfile"; } >"$newbody"
   else
-    log "no image changes and no existing block; leaving PR description untouched"
-    return 0
+    # Empty body: write the block alone, no leading separator.
+    cat "$blockfile" >"$newbody"
   fi
 
   if ! GH_TOKEN="$token" gh pr edit "$pr" --repo "$slug" --body-file "$newbody"; then
