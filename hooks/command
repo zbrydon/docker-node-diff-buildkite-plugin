@@ -20,11 +20,13 @@ log() { echo "docker-diff: $*" >&2; }
 
 scan_packages() {
   local ref="$1" out="$2"
-  # Empty file on scan failure, so the caller still produces a diff.
+  # On scan failure write an empty file (so the file still exists for callers) and
+  # return non-zero, so the caller can distinguish "scan failed" from "no packages".
   if ! syft scan "registry:${ref}" -q -o syft-json 2>/dev/null \
        | jq -r '.artifacts[] | [.type, .name, .version] | @tsv' \
        | sort -u >"$out"; then
     : >"$out"
+    return 1
   fi
 }
 
@@ -222,8 +224,9 @@ process_pair() {
 
   oldpkgs="$(mktemp "${WORKDIR}/old.XXXXXX")"
   newpkgs="$(mktemp "${WORKDIR}/new.XXXXXX")"
-  scan_packages "$bref" "$oldpkgs"
-  scan_packages "$aref" "$newpkgs"
+  local scan_ok=1
+  scan_packages "$bref" "$oldpkgs" || scan_ok=0
+  scan_packages "$aref" "$newpkgs" || scan_ok=0
 
   bver="$(node_version_from "$oldpkgs")"
   aver="$(node_version_from "$newpkgs")"
@@ -241,7 +244,11 @@ process_pair() {
     # shellcheck disable=SC2016
     printf 'Node.js `%s` → `%s`\n\n' "$bver" "$aver"
   fi
-  render_pkgdiff "$pkgdiff"
+  if [ "$scan_ok" -eq 1 ]; then
+    render_pkgdiff "$pkgdiff"
+  else
+    printf '_Package scan failed for this image; package diff unavailable._\n\n'
+  fi
   if [ "$node_changed" = 0 ]; then
     render_changelogs "$bver" "$aver"
   fi
