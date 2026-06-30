@@ -88,3 +88,34 @@ setup() {
   run read_list_property NOPE
   [ "$status" -ne 0 ]
 }
+
+@test "parse_syft_pin splits a valid pin" {
+  parse_syft_pin "v1.46.0@sha256:2fefc202b2eccab83888cc91f5a364a75df0dd777afbbae5b5e23ebd93d81ac6"
+  [ "$SYFT_PIN_VERSION" = "v1.46.0" ]
+  [ "$SYFT_PIN_SHA256" = "2fefc202b2eccab83888cc91f5a364a75df0dd777afbbae5b5e23ebd93d81ac6" ]
+}
+
+@test "parse_syft_pin lowercases the digest" {
+  parse_syft_pin "v1.46.0@sha256:2FEFC202B2ECCAB83888CC91F5A364A75DF0DD777AFBBAE5B5E23EBD93D81AC6"
+  [ "$SYFT_PIN_SHA256" = "2fefc202b2eccab83888cc91f5a364a75df0dd777afbbae5b5e23ebd93d81ac6" ]
+}
+
+@test "parse_syft_pin rejects a bare version (no digest)" {
+  run parse_syft_pin "v1.46.0"
+  [ "$status" -ne 0 ]
+}
+
+@test "parse_syft_pin rejects malformed pins" {
+  short="0123456789abcdef"
+  full="2fefc202b2eccab83888cc91f5a364a75df0dd777afbbae5b5e23ebd93d81ac6"
+  for p in \
+    "@sha256:${full}" \
+    "v1.46.0@sha256:${short}" \
+    "v1.46.0@sha256:${full}zz" \
+    "v1.46.0@sha1:${full}" \
+    "v1.46.0@sha256:" \
+    "v1.46.0@sha256:gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg"; do
+    run parse_syft_pin "$p"
+    [ "$status" -ne 0 ]
+  done
+}

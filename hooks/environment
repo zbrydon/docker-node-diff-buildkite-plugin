@@ -11,11 +11,18 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/shared.bash
 source "${HOOK_DIR}/../lib/shared.bash"
 
-SYFT_VERSION="$(plugin_read SYFT_VERSION "v1.46.0")"
+SYFT_DEFAULT_PIN="v1.46.0@sha256:2fefc202b2eccab83888cc91f5a364a75df0dd777afbbae5b5e23ebd93d81ac6"
 
 __dd_oldopts="$(set +o)"
 __dd_oldtrap="$(trap -p EXIT)"
 set -euo pipefail
+
+pin="$(plugin_read SYFT_VERSION "${SYFT_DEFAULT_PIN}")"
+if ! parse_syft_pin "${pin}"; then
+  echo ":docker: docker-diff: invalid syft-version '${pin}' (expected <version>@sha256:<64-hex>)" >&2
+  exit 1
+fi
+SYFT_VERSION="${SYFT_PIN_VERSION}"
 
 os="$(uname -s | tr '[:upper:]' '[:lower:]')"
 arch="$(uname -m)"
@@ -52,6 +59,15 @@ if ! dl "${base_url}/${checksums}" "${workdir}/${checksums}"; then
   exit 1
 fi
 
+
+manifest_actual="$(sha256_file "${workdir}/${checksums}")"
+if [ "${SYFT_PIN_SHA256}" != "${manifest_actual}" ]; then
+  echo "docker-diff: syft checksums.txt does not match the pinned sha256" >&2
+  echo "  pinned: ${SYFT_PIN_SHA256}" >&2
+  echo "  actual: ${manifest_actual}" >&2
+  exit 1
+fi
+
 expected="$(awk -v f="${asset}" '$2 == f {print $1}' "${workdir}/${checksums}")"
 if [ -z "${expected}" ]; then
   echo "docker-diff: no checksum entry for ${asset}" >&2
@@ -84,6 +100,8 @@ echo "docker-diff: syft ready (${install_dir}/syft)" >&2
 # (os/arch/workdir/...) and lib/shared.bash's functions do not leak into (or
 # clobber a later plugin's use of) the agent's bootstrap shell.
 unset os arch version_no_v tag asset checksums base_url workdir \
-      expected actual SYFT_VERSION HOOK_DIR PLUGIN_PREFIX install_dir
+      expected actual SYFT_VERSION HOOK_DIR PLUGIN_PREFIX install_dir \
+      pin manifest_actual SYFT_PIN_VERSION SYFT_PIN_SHA256 SYFT_DEFAULT_PIN
 unset -f dl plugin_read read_list_property image_repo_tag image_repo \
-         short_digest version_gt sha256_file repo_slug is_node_version
+         short_digest version_gt sha256_file repo_slug is_node_version \
+         parse_syft_pin
