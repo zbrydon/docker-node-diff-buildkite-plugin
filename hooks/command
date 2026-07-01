@@ -10,6 +10,9 @@ source "${HOOK_DIR}/../lib/shared.bash"
 MAX_RELEASES=20
 MARKER_START="<!-- docker-diff:start -->"
 MARKER_END="<!-- docker-diff:end -->"
+# GitHub rejects PR bodies larger than 65536 bytes; keep a margin. fit_pr_body
+# trims the assembled body to this ceiling before we call `gh pr edit`.
+MAX_PR_BODY_BYTES=65000
 DIST_INDEX_URL="https://nodejs.org/dist/index.json"
 CHANGELOG_URL_BASE="https://raw.githubusercontent.com/nodejs/node/main/doc/changelogs"
 
@@ -90,6 +93,13 @@ releases_between() {
   printf '%s\n' "${out[@]}" | sort -rV | head -n "${MAX_RELEASES}"
 }
 
+# node_release_link VER -> the one-line "See <release notes URL>" fallback, reused
+# by changelog_section (when a version's section is missing) and by fit_pr_body
+# (when a section is collapsed to fit the PR size limit).
+node_release_link() {
+  printf 'See https://github.com/nodejs/node/releases/tag/v%s' "$1"
+}
+
 changelog_section() {
   local version="$1"
   local major="${version%%.*}"
@@ -100,12 +110,14 @@ changelog_section() {
       -o "$file" 2>/dev/null || : >"$file"
   fi
 
-  awk -v id="$version" '
+  local link
+  link="$(node_release_link "$version")"
+  awk -v id="$version" -v link="$link" '
     BEGIN { tag = "<a id=\"" id "\"" }
     index($0, tag) { cap = 1; found = 1; print; next }
     cap && index($0, "<a id=\"") { cap = 0 }
     cap { print }
-    END { if (!found) printf "See https://github.com/nodejs/node/releases/tag/v%s", id }
+    END { if (!found) print link }
   ' "$file"
 }
 
@@ -227,7 +239,10 @@ render_pkgdiff() {
     return
   fi
   n="$(printf '%s\n' "$pkgdiff" | wc -l | tr -d ' ')"
+  # The <!-- dd:pkg --> marker is invisible in rendered markdown; fit_pr_body uses
+  # it to find and collapse this list if the PR body would exceed the size limit.
   printf '<details><summary>%s package change(s)</summary>\n\n' "$n"
+  printf '<!-- dd:pkg -->\n'
   printf '%s\n\n' "$pkgdiff"
   printf '</details>\n\n'
 }
@@ -243,7 +258,9 @@ render_changelogs() {
   while IFS= read -r v; do
     [ -z "$v" ] && continue
     sec="$(changelog_section "$v")"
-    printf '<details><summary>v%s</summary>\n\n%s\n\n</details>\n\n' "$v" "$sec"
+    # The <!-- dd:cl:VER --> marker is invisible in rendered markdown; fit_pr_body
+    # uses it to collapse this section to a release link if the body is too large.
+    printf '<details><summary>v%s</summary>\n\n<!-- dd:cl:%s -->\n%s\n\n</details>\n\n' "$v" "$v" "$sec"
   done <<<"$releases"
 }
 
@@ -319,6 +336,113 @@ assemble_final() {
     printf '%s Docker image(s) changed; no Node.js runtime change.\n\n' "$nchanged"
   fi
   cat "$report"
+}
+
+# fit_pr_body FILE -> trim the assembled PR body in place so it stays under
+# MAX_PR_BODY_BYTES. Progressive, largest-first: collapse the biggest Node.js
+# changelog sections to their release-notes link, then oversized package lists to
+# a count + note, then hard-truncate as a last resort. Collapsible regions are
+# located by the invisible <!-- dd:cl:VER --> / <!-- dd:pkg --> markers that
+# rendering emits; a changelog/package section never contains a literal
+# </details>, so that line reliably marks the end of a region.
+fit_pr_body() {
+  local file="$1" size target saved net ver bytes idx link
+  size="$(wc -c <"$file")"
+  [ "$size" -le "$MAX_PR_BODY_BYTES" ] && return 0
+
+  # Tier 1: Node.js changelog sections, largest first.
+  target=$((size - MAX_PR_BODY_BYTES))
+  saved=0
+  local vers=""
+  while IFS=$'\t' read -r ver bytes; do
+    [ -z "$ver" ] && continue
+    link="$(node_release_link "$ver")"
+    net=$((bytes - ${#link} - 1))
+    [ "$net" -le 0 ] && continue
+    vers="${vers:+$vers,}${ver}"
+    saved=$((saved + net))
+    [ "$saved" -ge "$target" ] && break
+  done < <(
+    awk '
+      index($0, "<!-- dd:cl:") == 1 {
+        v = $0; sub(/^<!-- dd:cl:/, "", v); sub(/ -->$/, "", v)
+        inreg = 1; b = length($0) + 1; cur = v; next
+      }
+      inreg && index($0, "</details>") == 1 { print cur "\t" b; inreg = 0; next }
+      inreg { b += length($0) + 1 }
+    ' "$file" | sort -k2,2 -rn
+  )
+
+  if [ -n "$vers" ]; then
+    # pfx comes from node_release_link so the emitted URL and the ${#link} byte
+    # accounting above stay in sync if that function's URL ever changes.
+    awk -v vers="$vers" -v pfx="$(node_release_link '')" '
+      BEGIN { n = split(vers, a, ","); for (i = 1; i <= n; i++) col[a[i]] = 1 }
+      skip { if (index($0, "</details>") == 1) { skip = 0; print } next }
+      index($0, "<!-- dd:cl:") == 1 {
+        v = $0; sub(/^<!-- dd:cl:/, "", v); sub(/ -->$/, "", v)
+        if (v in col) { print pfx v; skip = 1; next }
+        print; next
+      }
+      { print }
+    ' "$file" >"${file}.tmp" && mv "${file}.tmp" "$file"
+    size="$(wc -c <"$file")"
+  fi
+  [ "$size" -le "$MAX_PR_BODY_BYTES" ] && return 0
+
+  # Tier 2: package lists, largest first (no canonical URL, so collapse to a note).
+  local note='_Package details omitted to fit GitHub'\''s PR size limit._'
+  target=$((size - MAX_PR_BODY_BYTES))
+  saved=0
+  local idxs=""
+  while IFS=$'\t' read -r idx bytes; do
+    [ -z "$idx" ] && continue
+    net=$((bytes - ${#note} - 1))
+    [ "$net" -le 0 ] && continue
+    idxs="${idxs:+$idxs,}${idx}"
+    saved=$((saved + net))
+    [ "$saved" -ge "$target" ] && break
+  done < <(
+    awk '
+      index($0, "<!-- dd:pkg -->") == 1 { idx++; inreg = 1; b = length($0) + 1; cur = idx; next }
+      inreg && index($0, "</details>") == 1 { print cur "\t" b; inreg = 0; next }
+      inreg { b += length($0) + 1 }
+    ' "$file" | sort -k2,2 -rn
+  )
+
+  if [ -n "$idxs" ]; then
+    awk -v idxs="$idxs" -v note="$note" '
+      BEGIN { n = split(idxs, a, ","); for (i = 1; i <= n; i++) col[a[i]] = 1 }
+      skip { if (index($0, "</details>") == 1) { skip = 0; print } next }
+      index($0, "<!-- dd:pkg -->") == 1 {
+        idx++
+        if (idx in col) { print note; skip = 1; next }
+        print; next
+      }
+      { print }
+    ' "$file" >"${file}.tmp" && mv "${file}.tmp" "$file"
+    size="$(wc -c <"$file")"
+  fi
+  [ "$size" -le "$MAX_PR_BODY_BYTES" ] && return 0
+
+  # Tier 3 (pathological): hard-truncate on a line boundary, then re-close the
+  # docker-diff block so a later run can still find and replace it in place.
+  local notice='_Report truncated to fit GitHub'\''s PR size limit._'
+  local budget=$((MAX_PR_BODY_BYTES - ${#notice} - ${#MARKER_END} - 4))
+  [ "$budget" -lt 0 ] && budget=0
+  # Emit everything up to and including MARKER_START unconditionally so the block
+  # stays findable/replaceable next run (a huge non-collapsible preamble above the
+  # marker would otherwise get MARKER_START cut, orphaning MARKER_END). Only the
+  # block body is budget-limited. LC_ALL=C makes awk's length() count bytes, not
+  # characters, so multibyte bulk cannot slip past the byte-derived budget.
+  # (If the preamble alone exceeds budget the body overflows slightly, but that is
+  # the user's own content and preserving the marker takes priority.)
+  LC_ALL=C awk -v max="$budget" -v start="$MARKER_START" '
+    !seenstart { print; tot += length($0) + 1; if (index($0, start)) seenstart = 1; next }
+    { if (tot + length($0) + 1 > max) exit; print; tot += length($0) + 1 }
+  ' "$file" >"${file}.tmp"
+  printf '\n%s\n\n%s\n' "$notice" "$MARKER_END" >>"${file}.tmp"
+  mv "${file}.tmp" "$file"
 }
 
 upsert_pr() {
@@ -400,6 +524,8 @@ upsert_pr() {
     # Empty body: write the block alone, no leading separator.
     cat "$blockfile" >"$newbody"
   fi
+
+  fit_pr_body "$newbody"
 
   if ! GH_TOKEN="$token" gh pr edit "$pr" --repo "$slug" --body-file "$newbody"; then
     log "could not update PR #${pr}"
