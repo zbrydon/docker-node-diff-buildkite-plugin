@@ -254,14 +254,17 @@ render_changelogs() {
     log "no in-range Node.js releases for ${bver} -> ${aver}"
     return
   fi
-  printf '#### Node.js changelog\n\n'
+  # All versions share one outer collapsible. The <!-- dd:cl:VER --> / <!-- /dd:cl:VER -->
+  # markers are invisible in rendered markdown; fit_pr_body uses them to collapse an
+  # individual version's section to a release link if the body is too large. The
+  # #### vVER heading sits outside that region, so a collapsed version keeps its label.
+  printf '<details><summary>Node.js changelog</summary>\n\n'
   while IFS= read -r v; do
     [ -z "$v" ] && continue
     sec="$(changelog_section "$v")"
-    # The <!-- dd:cl:VER --> marker is invisible in rendered markdown; fit_pr_body
-    # uses it to collapse this section to a release link if the body is too large.
-    printf '<details><summary>v%s</summary>\n\n<!-- dd:cl:%s -->\n%s\n\n</details>\n\n' "$v" "$v" "$sec"
+    printf '#### v%s\n\n<!-- dd:cl:%s -->\n%s\n\n<!-- /dd:cl:%s -->\n\n' "$v" "$v" "$sec" "$v"
   done <<<"$releases"
+  printf '</details>\n\n'
 }
 
 # Returns success when the Node.js runtime version changed, so the caller can count it.
@@ -368,7 +371,7 @@ fit_pr_body() {
         v = $0; sub(/^<!-- dd:cl:/, "", v); sub(/ -->$/, "", v)
         inreg = 1; b = length($0) + 1; cur = v; next
       }
-      inreg && index($0, "</details>") == 1 { print cur "\t" b; inreg = 0; next }
+      inreg && index($0, "<!-- /dd:cl:") == 1 { print cur "\t" b; inreg = 0; next }
       inreg { b += length($0) + 1 }
     ' "$file" | sort -k2,2 -rn
   )
@@ -378,7 +381,7 @@ fit_pr_body() {
     # accounting above stay in sync if that function's URL ever changes.
     awk -v vers="$vers" -v pfx="$(node_release_link '')" '
       BEGIN { n = split(vers, a, ","); for (i = 1; i <= n; i++) col[a[i]] = 1 }
-      skip { if (index($0, "</details>") == 1) { skip = 0; print } next }
+      skip { if (index($0, "<!-- /dd:cl:") == 1) skip = 0; next }
       index($0, "<!-- dd:cl:") == 1 {
         v = $0; sub(/^<!-- dd:cl:/, "", v); sub(/ -->$/, "", v)
         if (v in col) { print pfx v; skip = 1; next }

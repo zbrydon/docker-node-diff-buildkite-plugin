@@ -125,10 +125,12 @@ run_hook() {
   [ "$status" -eq 0 ]
   grep -q "docker-diff:start" "${PR_BODY_FILE}"
   grep -q 'Node.js `20.9.0` → `20.11.0`' "${PR_BODY_FILE}"
-  grep -q "v20.11.0</summary>" "${PR_BODY_FILE}"
-  grep -q "v20.10.0</summary>" "${PR_BODY_FILE}"
+  # all in-range versions share one collapsible, each with its own heading
+  grep -q "Node.js changelog</summary>" "${PR_BODY_FILE}"
+  grep -q "#### v20.11.0" "${PR_BODY_FILE}"
+  grep -q "#### v20.10.0" "${PR_BODY_FILE}"
   # the before-version is not in range (before < v <= after)
-  run ! grep -q "v20.9.0</summary>" "${PR_BODY_FILE}"
+  run ! grep -q "#### v20.9.0" "${PR_BODY_FILE}"
   grep -q "Original body." "${PR_BODY_FILE}"
   # changed packages link to their registry/distro page
   grep -q '\[`libssl3t64`\](https://packages.debian.org/libssl3t64)' "${PR_BODY_FILE}"
@@ -210,13 +212,13 @@ run_hook() {
 @test "no node change still lists the package diff and clears stale changelogs" {
   printf 'Original body.\n' >"${PR_BODY_FILE}"
   run_hook 42
-  grep -q "v20.11.0</summary>" "${PR_BODY_FILE}"
+  grep -q "Node.js changelog</summary>" "${PR_BODY_FILE}"
   syft_versions "20.9.0" "20.9.0"
   run_hook 42
   # node unchanged -> changelog blocks gone, but the libssl bump is still listed
   grep -q "no Node.js runtime change" "${PR_BODY_FILE}"
   grep -q "libssl3t64" "${PR_BODY_FILE}"
-  ! grep -q "v20.11.0</summary>" "${PR_BODY_FILE}"
+  ! grep -q "Node.js changelog</summary>" "${PR_BODY_FILE}"
 }
 
 @test "package-only diff posts a fresh block with no existing markers" {
@@ -288,7 +290,7 @@ run_hook() {
   [ "$status" -eq 0 ]
   grep -q "no Node.js runtime change" "${PR_BODY_FILE}"
   grep -q "libssl3t64" "${PR_BODY_FILE}"
-  ! grep -q "summary>v" "${PR_BODY_FILE}"
+  ! grep -q "Node.js changelog</summary>" "${PR_BODY_FILE}"
 }
 
 @test "a failed scan renders a note, not a misleading full diff" {

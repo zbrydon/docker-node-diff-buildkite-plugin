@@ -19,24 +19,26 @@ big() { head -c "$1" /dev/zero | tr '\0' x; }
 @test "fit_pr_body collapses the largest changelog first, keeps small ones" {
   {
     printf '%s\n\n' "$MARKER_START"
-    printf '#### Node.js changelog\n\n'
-    printf '<details><summary>v20.11.0</summary>\n\n<!-- dd:cl:20.11.0 -->\n%s\n\n</details>\n\n' "$(big 70000)"
-    printf '<details><summary>v20.10.0</summary>\n\n<!-- dd:cl:20.10.0 -->\nten.\n\n</details>\n\n'
+    printf '<details><summary>Node.js changelog</summary>\n\n'
+    printf '#### v20.11.0\n\n<!-- dd:cl:20.11.0 -->\n%s\n\n<!-- /dd:cl:20.11.0 -->\n\n' "$(big 70000)"
+    printf '#### v20.10.0\n\n<!-- dd:cl:20.10.0 -->\nten.\n\n<!-- /dd:cl:20.10.0 -->\n\n'
+    printf '</details>\n\n'
     printf '%s\n' "$MARKER_END"
   } >"$BODY"
 
   fit_pr_body "$BODY"
 
   [ "$(wc -c <"$BODY")" -le "$MAX_PR_BODY_BYTES" ]
-  # every version entry stays visible
-  grep -q 'v20.11.0</summary>' "$BODY"
-  grep -q 'v20.10.0</summary>' "$BODY"
+  # every version label stays visible (heading sits outside the collapsed region)
+  grep -q '#### v20.11.0' "$BODY"
+  grep -q '#### v20.10.0' "$BODY"
   # the large section is collapsed to its release link
   grep -q 'See https://github.com/nodejs/node/releases/tag/v20.11.0' "$BODY"
   # the small section is kept in full (largest-first, not all-or-nothing)
   grep -q '^ten\.$' "$BODY"
   run ! grep -q 'releases/tag/v20.10.0' "$BODY"
-  # block stays well-formed for the next in-place replacement
+  # the single outer collapsible stays well-formed for the next in-place replacement
+  grep -q 'Node.js changelog</summary>' "$BODY"
   grep -q 'docker-diff:start' "$BODY"
   grep -q 'docker-diff:end' "$BODY"
 }
@@ -59,7 +61,9 @@ big() { head -c "$1" /dev/zero | tr '\0' x; }
 @test "fit_pr_body leaves a body under the limit byte-for-byte unchanged" {
   {
     printf '%s\n\n' "$MARKER_START"
-    printf '<details><summary>v20.11.0</summary>\n\n<!-- dd:cl:20.11.0 -->\neleven.\n\n</details>\n\n'
+    printf '<details><summary>Node.js changelog</summary>\n\n'
+    printf '#### v20.11.0\n\n<!-- dd:cl:20.11.0 -->\neleven.\n\n<!-- /dd:cl:20.11.0 -->\n\n'
+    printf '</details>\n\n'
     printf '%s\n' "$MARKER_END"
   } >"$BODY"
 
