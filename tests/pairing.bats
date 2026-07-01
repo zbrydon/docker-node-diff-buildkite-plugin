@@ -27,6 +27,18 @@ sha() { printf "%0.s$1" $(seq 1 64); }  # 64-char fake digest of repeated char
   [ "$output" = "registry/node-alpine-3.20" ]
 }
 
+@test "image_repo_family normalizes only the name, not the namespace" {
+  run image_repo_family "registry/team-1-svc/app:tag@sha256:$(sha 0)"
+  [ "$output" = "registry/team-1-svc/app" ]
+  run image_repo_family "registry/team-2-svc/app:tag@sha256:$(sha 0)"
+  [ "$output" = "registry/team-2-svc/app" ]
+}
+
+@test "image_repo_family collapses adjacent version tokens" {
+  run image_repo_family "registry/x/node-1-2-alpine:tag@sha256:$(sha 0)"
+  [ "$output" = "registry/x/node-alpine" ]
+}
+
 @test "extract_refs ignores the syntax directive but keeps the FROM image" {
   removed="$(mktemp)"; added="$(mktemp)"
   diff="$(cat <<'EOF'

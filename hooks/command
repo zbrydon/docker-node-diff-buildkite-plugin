@@ -444,7 +444,9 @@ main() {
   upsert_pr "$block" "$nchanged"
 }
 
-# Allow BATS tests to source this hook without executing main().
-if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+# Allow BATS tests to source this hook without executing main(). BATS_TEST_DIRNAME
+# is set only inside a running bats test and is not exported to child processes, so
+# main() still runs both when Buildkite sources the hook and when it is executed.
+if [ -z "${BATS_TEST_DIRNAME:-}" ]; then
   main "$@"
 fi

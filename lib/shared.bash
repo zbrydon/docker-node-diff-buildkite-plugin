@@ -57,7 +57,13 @@ image_repo() {
 #   registry/app-v2-service:tag@sha256:.. -> registry/app-v2-service   (unchanged)
 #   .../node-18-alpine-3.20:tag@sha256:.. -> .../node-alpine-3.20       (3.20 kept)
 image_repo_family() {
-  image_repo "$1" | sed -E 's#-[0-9]+(-|$)#\1#g; s#-$##'
+  local repo name prefix
+  repo="$(image_repo "$1")"
+  name="${repo##*/}"           # image name (last segment)
+  prefix="${repo%/*}"          # registry[/namespace]
+  if [ "$prefix" != "$repo" ]; then prefix="${prefix}/"; else prefix=""; fi
+  name="$(printf '%s' "$name" | sed -E 's#(-[0-9]+)+(-|$)#\2#g; s#-$##')"
+  printf '%s' "${prefix}${name}"
 }
 
 # repo_slug URL -> owner/name. github.com only: strips a github.com[:/] host (https
